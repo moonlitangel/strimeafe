@@ -395,8 +395,7 @@ def main():
     # WebRTC 스트리머 생성
     webrtc_ctx = webrtc_streamer(
         key="pose-estimation",
-        mode=webrtc_streamer.VideoTransformerBase,
-        video_transformer_factory=VideoTransformer,
+        video_transformer_factory=VideoTransformer,  # mode 파라미터 제거
         rtc_configuration=rtc_configuration,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
