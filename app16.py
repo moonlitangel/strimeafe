@@ -6,6 +6,8 @@ import os
 import pyttsx3
 import threading
 import base64
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+import av
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
@@ -339,59 +341,90 @@ class EnhancedSquatAnalysisEngine:
     def cleanup(self):
         self.voice.cleanup()
 
+class VideoTransformer(VideoTransformerBase):
+    def __init__(self):
+        self.analyzer = EnhancedSquatAnalysisEngine()
+        
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        processed_frame, feedback = self.analyzer.analyze_frame(img)
+        
+        # 피드백 정보 추가
+        feedback_color = (0, 255, 0) if feedback['is_correct'] else (0, 0, 255)
+        cv2.putText(
+            processed_frame,
+            feedback['feedback'],
+            (50, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            feedback_color,
+            2
+        )
+        
+        # 현재 상태를 세션 상태에 저장
+        if 'current_feedback' not in st.session_state:
+            st.session_state.current_feedback = {}
+        st.session_state.current_feedback = {
+            'rep_count': self.analyzer.rep_count,
+            'phase': feedback['phase'],
+            'is_correct': feedback['is_correct']
+        }
+        
+        return av.VideoFrame.from_ndarray(processed_frame, format="bgr24")
+
 def main():
     if 'analyzer' not in st.session_state:
-        st.session_state.analyzer=EnhancedSquatAnalysisEngine()
+        st.session_state.analyzer = EnhancedSquatAnalysisEngine()
+
     with st.sidebar:
         st.header("Settings ⚙️")
-        show_skeleton=st.checkbox("Show Skeleton 🦴",True)
-        show_guide=st.checkbox("Show Guide Area 🎯",True)
-        show_angles=st.checkbox("Show Joint Angles 📐",True)
+        show_skeleton = st.checkbox("Show Skeleton 🦴", True)
+        show_guide = st.checkbox("Show Guide Area 🎯", True)
+        show_angles = st.checkbox("Show Joint Angles 📐", True)
 
-    cols=st.columns(4)
-    if cols[0].button("Start Calibration",use_container_width=True):
-        st.session_state.analyzer=EnhancedSquatAnalysisEngine()
+    cols = st.columns(4)
+    if cols[0].button("Start Calibration", use_container_width=True):
+        st.session_state.analyzer = EnhancedSquatAnalysisEngine()
         st.info("Perform 5 squats for baseline.")
-    if cols[1].button("Camera Check",use_container_width=True):
-        st.session_state.camera_check=True
-    if cols[2].button("Start Workout",use_container_width=True):
-        st.session_state.workout_active=True
-    if cols[3].button("Stop",use_container_width=True):
-        if hasattr(st.session_state.analyzer,'cleanup'):
-            st.session_state.analyzer.cleanup()
-        st.session_state.workout_active=False
+    
+    # WebRTC 설정
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+    
+    # WebRTC 스트리머 생성
+    webrtc_ctx = webrtc_streamer(
+        key="pose-estimation",
+        mode=webrtc_streamer.VideoTransformerBase,
+        video_transformer_factory=VideoTransformer,
+        rtc_configuration=rtc_configuration,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
 
-    FRAME_WINDOW=st.empty()
-    progress_cols=st.columns(2)
-    rep_count=progress_cols[0].empty()
-    phase_indicator=progress_cols[1].empty()
+    # 진행 상황 표시
+    progress_cols = st.columns(2)
+    
+    # 세션 상태에서 현재 정보 가져오기
+    if 'current_feedback' in st.session_state:
+        progress_cols[0].metric(
+            "Reps Completed 🔄",
+            st.session_state.current_feedback.get('rep_count', 0)
+        )
+        progress_cols[1].info(
+            f"Current Phase: {st.session_state.current_feedback.get('phase', 'UNKNOWN')}"
+        )
 
-    cap=cv2.VideoCapture(0)
-    try:
-        while cap.isOpened():
-            ret,frame=cap.read()
-            if not ret:
-                st.error("Failed to capture video frame")
-                break
-            processed_frame,feedback=st.session_state.analyzer.analyze_frame(frame)
-            feedback_color=(0,255,0) if feedback['is_correct'] else (0,0,255)
-            cv2.putText(processed_frame,feedback['feedback'],(50,50),cv2.FONT_HERSHEY_SIMPLEX,1,feedback_color,2)
-            rep_count.metric("Reps Completed 🔄",st.session_state.analyzer.rep_count)
-            phase_indicator.info(f"Current Phase: {feedback['phase']}")
-            FRAME_WINDOW.image(processed_frame,channels="BGR")
-            if cv2.waitKey(1)&0xFF==27:
-                break
-    finally:
-        cap.release()
-        if hasattr(st.session_state.analyzer,'cleanup'):
-            st.session_state.analyzer.cleanup()
-
-    st.markdown("<div class='references'><b>References:</b><br>"
-                "1. Escamilla RF. ...<br>"
-                "2. Caterisano A, et al. ...<br>"
-                "3. Behm DG, et al. ...<br>"
-                "4. Schoenfeld BJ. ...<br>"
-                "</div>",unsafe_allow_html=True)
+    # 참조 문헌
+    st.markdown(
+        "<div class='references'><b>References:</b><br>"
+        "1. Escamilla RF. ...<br>"
+        "2. Caterisano A, et al. ...<br>"
+        "3. Behm DG, et al. ...<br>"
+        "4. Schoenfeld BJ. ...<br>"
+        "</div>",
+        unsafe_allow_html=True
+    )
 
 if __name__=="__main__":
     main()
